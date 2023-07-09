@@ -1,0 +1,47 @@
+name: Trigger ArgoCD & Versioning  
+
+on:
+  push:
+    branches:
+      - dev
+      - prod
+       
+  workflow_dispatch:    
+  
+jobs:
+   
+   dev :
+    if: ${{ github.ref == 'refs/heads/dev' }}
+    uses: sirpi-io/IUDX-bengaluru-lake-data-story/.github/workflows/version.yml@dev
+    with:
+      env: 'dev'
+      image: 'iudx-bengaluru-lake-data-story'
+      from: 'local'
+    secrets: inherit
+   prod :
+    if: ${{ github.ref == 'refs/heads/prod' }}
+    uses: sirpi-io/IUDX-bengaluru-lake-data-story/.github/workflows/version.yml@prod
+    with:
+      env: 'prod'
+      image: 'iudx-bengaluru-lake-data-story'
+      from: 'local'
+    secrets: inherit
+    
+    
+    
+    
+
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    

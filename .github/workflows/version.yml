@@ -1,0 +1,139 @@
+name: Build & Deploy CI/CD
+
+on:
+  workflow_call:
+    inputs:
+      env:
+        required: true
+        type: string
+      image:
+        required: true
+        type: string
+      from:
+        required: true
+        type: string
+env:
+  USERNAME: ${{ secrets.DOCKERUSERNAME }}
+  PASSWORD: ${{ secrets.DOCKERPASSWORD }}
+  GIT_TOKEN: ${{ secrets.DEVOPS_TOKEN }}
+  ARGO_PASS: ${{ secrets.ARGO_PASS }}
+  ARGO_URL: ${{ secrets.ARGO_URL }}
+  VAULT_TOKEN: ${{ secrets.VAULT_TOKEN }}
+  IMAGE_NAME: ${{ inputs.image }}
+  ENV: ${{ inputs.env }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      max-parallel: 4
+      matrix:
+        node-version: [16.x]
+        
+    steps:
+    - uses: actions/checkout@v2
+      with:
+          fetch-depth: 0
+    - name: Setup Vault CLI
+      uses: eLco/setup-vault@v1.0.2
+        
+    - name: vault login
+      run: |
+          vault login -address="https://vault.sirpi.co.in" $VAULT_TOKEN
+          
+    - name: Set up node ${{ matrix.node-version }}
+      uses: actions/setup-node@v3
+      with:
+        node-version: ${{ matrix.node-version }}
+    
+    - name: Release new version
+      id: versioning
+      run: |
+        git config --global user.email "devops@sirpi.io"
+        git config --global user.name "devops1-sirpi"    
+        npm install dotenv --legacy-peer-deps
+        vault kv get -address="https://vault.sirpi.co.in" -field=node-script kv/devops/version-control > change.js
+        vault kv get -address="https://vault.sirpi.co.in" -field=$ENV-version kv/projects/$IMAGE_NAME > .env
+        node change.js
+        rm change.js
+        VAR=$(cat .env)
+        vault kv patch -address="https://vault.sirpi.co.in" kv/projects/$IMAGE_NAME $ENV-version=$VAR
+        VAR=${VAR:19}
+        echo "$VAR"
+        if [[ $ENV =  "prod" ]]; then
+          echo "VERSION=$VAR" >> $GITHUB_OUTPUT
+        else
+          echo "VERSION=$VAR-$ENV" >> $GITHUB_OUTPUT
+        fi
+        
+    outputs:
+      output1: ${{ steps.versioning.outputs.VERSION }}    
+
+  docker:
+    runs-on: ubuntu-latest
+    needs: [build]
+    strategy:
+      max-parallel: 4
+      matrix:
+        node-version: [16]
+    env:
+      VERSION: ${{ needs.build.outputs.output1 }}
+    steps:
+       - name: Set up Python ${{ matrix.node-version }}
+         uses: actions/setup-node@v3
+         with:
+          node-version: ${{ matrix.node-version }}
+          
+       - name: Setup Vault CLI
+         uses: eLco/setup-vault@v1.0.2
+        
+       - name: vault login
+         run: |
+          vault login -address="https://vault.sirpi.co.in" $VAULT_TOKEN
+       - name: docker push
+         run: |
+          git config --global user.email "devops@sirpi.io"
+          git config --global user.name "devops1-sirpi"    
+          git clone --branch $ENV https://devops1-sirpi:$GIT_TOKEN@github.com/sirpi-io/IUDX-bengaluru-lake-data-story.git code
+          cd code 
+          python -m pip install --upgrade pip
+          
+          
+          
+          vault kv get -address="https://vault.sirpi.co.in" -field=bengaluru-lake-data-story-dockerfile kv/projects/$IMAGE_NAME > Dockerfile
+          
+          
+          echo "$PASSWORD" | docker login -u $USERNAME --password-stdin
+          docker build --no-cache --network=host --file Dockerfile --tag sirpi/$IMAGE_NAME:$VERSION .
+          docker push sirpi/$IMAGE_NAME:$VERSION
+       - name: Helming charts
+         run: |
+          vault kv get -address="https://vault.sirpi.co.in" -field=charts kv/devops/version-control > Charts.yaml
+          vault kv get -address="https://vault.sirpi.co.in" -field=bash kv/devops/version-control > create_charts.sh
+          bash create_charts.sh
+          git clone --branch $ENV https://devops1-sirpi:$GIT_TOKEN@github.com/sirpi-io/gitops.git helmfiles
+          cp Chart.yaml helmfiles/charts/$IMAGE_NAME/Chart.yaml
+          cd helmfiles
+          git add .
+          git commit -m "Charts updated with newer release $VERSION"
+          git push -f
+           
+       - name: Argo CD Action
+         uses: clowdhaus/argo-cd-action@v1.9.0
+        
+       - name: Trigger ArgoCD pipeline
+         run: |
+          argocd login $ARGO_URL --username admin --password $ARGO_PASS --grpc-web
+          argocd app create $IMAGE_NAME-$ENV \
+          --repo 'git@github.com:sirpi-io/gitops.git' \
+          --path charts/$IMAGE_NAME \
+          --dest-server 'https://kubernetes.default.svc' \
+          --dest-namespace default \
+          --sync-policy automated \
+          --revision $ENV \
+          --auto-prune \
+          --upsert
+          argocd app sync $IMAGE_NAME-$ENV --async --force --prune --grpc-web || true
+          
+          
+          
