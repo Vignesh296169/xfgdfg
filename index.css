@@ -14,6 +14,7 @@
 }
 html,
 main {
+ 
   /* scroll-behavior: smooth; */
   /* scroll-snap-type: proximity;
   scroll-snap-type: y proximity;
@@ -649,8 +650,12 @@ body {
 
   
  }
- .data-section > *{
-  
+ /* body{
+  margin: 0;
+  padding: 0;
+ } */
+ .data-section .picture-div{
+   flex-basis: 1;
  
  }
  .svg-div{
